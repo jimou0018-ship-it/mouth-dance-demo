@@ -217,7 +217,7 @@ async function loadModel(){
   // GPU 仅作为 CPU 异常时的兜底。
   let lastErr = null;
   for (const delegate of ['CPU','GPU']) {
-    $('status').textContent = '正在初始化识别引擎（' + delegate + '）…';
+    $('status').textContent = '正在编译识别引擎（' + delegate + '）… 首次约需 30~60 秒，请耐心等待';
     try {
       faceLandmarker = await withTimeout(
         FaceLandmarker.createFromOptions(vision, {
@@ -226,7 +226,7 @@ async function loadModel(){
           runningMode: 'VIDEO',
           numFaces: 1,
         }),
-        25000, delegate + ' 初始化'
+        60000, delegate + ' 初始化'
       );
       return;
     } catch(e) { lastErr = e; }
