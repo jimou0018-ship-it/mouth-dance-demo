@@ -204,20 +204,65 @@ let missFlash = 0;
 
 bestEl.textContent = best;
 
+// ---------- 带进度下载 ----------
+function fmtSpeed(bps){
+  if (bps >= 1024) return (bps/1024).toFixed(1) + 'MB/s';
+  return bps.toFixed(0) + 'KB/s';
+}
+async function downloadWithProgress(url, label){
+  $('status').textContent = '正在下载 ' + label + '… 0%';
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error('下载 ' + label + ' 失败（HTTP ' + resp.status + '）');
+  if (!resp.body) return resp.arrayBuffer();
+  const total = +resp.headers.get('content-length') || 0;
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  const t0 = performance.now();
+  let lastUi = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    const now = performance.now();
+    if (now - lastUi > 120) {
+      lastUi = now;
+      const dt = (now - t0) / 1000;
+      const speed = received / dt / 1024;   // KB/s
+      const mb = (received/1024/1024).toFixed(1);
+      if (total > 0) {
+        const pct = Math.min(100, (received / total * 100) | 0);
+        $('status').textContent = `正在下载 ${label}… ${pct}%（${mb}MB · ${fmtSpeed(speed)}）`;
+      } else {
+        $('status').textContent = `正在下载 ${label}… ${mb}MB（${fmtSpeed(speed)}）`;
+      }
+    }
+  }
+  const dt = (performance.now() - t0) / 1000;
+  const speed = received / dt / 1024;
+  console.log('[下载] ' + label + ' 完成：' + (received/1024/1024).toFixed(2) + 'MB，耗时 ' + dt.toFixed(1) + 's，速度 ' + fmtSpeed(speed));
+  return new Blob(chunks).arrayBuffer();
+}
+
 // ---------- 初始化模型 ----------
 async function loadModel(){
-  $('status').textContent = '正在下载 AI 模型资源…';
+  // 预下载大文件（实时显示进度 + 网速，并预热浏览器缓存）
+  await downloadWithProgress('./mp/wasm/vision_wasm_nosimd_internal.wasm', '识别引擎');
+  await downloadWithProgress('./models/face_landmarker.task', 'AI 模型');
+
   const vision = await withTimeout(
     FilesetResolver.forVisionTasks('./mp/wasm'),
-    30000, '模型资源下载'
+    30000, '模型资源定位'
   );
   const base = { modelAssetPath:'./models/face_landmarker.task' };
   // 移动端优先 CPU delegate：GPU delegate 在部分安卓 Chrome 机型上会「挂起」而非「报错」，
   // 导致永远卡在加载转圈、不会回退。嘴势判定是轻量任务，手机 CPU 跑 WASM 足够。
   // GPU 仅作为 CPU 异常时的兜底。
   let lastErr = null;
+  const tStart = performance.now();
   for (const delegate of ['CPU','GPU']) {
-    $('status').textContent = '正在编译识别引擎（' + delegate + '）… 首次约需 30~60 秒，请耐心等待';
+    $('status').textContent = '正在编译识别引擎（' + delegate + '）…（下载已完成，正在初始化）';
     try {
       faceLandmarker = await withTimeout(
         FaceLandmarker.createFromOptions(vision, {
@@ -226,12 +271,13 @@ async function loadModel(){
           runningMode: 'VIDEO',
           numFaces: 1,
         }),
-        60000, delegate + ' 初始化'
+        120000, delegate + ' 初始化'
       );
       return;
     } catch(e) { lastErr = e; }
   }
-  throw new Error('AI 模型加载失败' + (lastErr ? '：' + lastErr.message : ''));
+  const waited = ((performance.now() - tStart) / 1000).toFixed(0);
+  throw new Error('识别引擎初始化失败（已等待 ' + waited + ' 秒）：' + (lastErr ? lastErr.message : ''));
 }
 
 // ---------- 摄像头 ----------
