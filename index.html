@@ -206,18 +206,28 @@ bestEl.textContent = best;
 
 // ---------- 初始化模型 ----------
 async function loadModel(){
-  const vision = await FilesetResolver.forVisionTasks('./mp/wasm');
+  $('status').textContent = '正在下载 AI 模型资源…';
+  const vision = await withTimeout(
+    FilesetResolver.forVisionTasks('./mp/wasm'),
+    30000, '模型资源下载'
+  );
   const base = { modelAssetPath:'./models/face_landmarker.task' };
+  // 移动端优先 CPU delegate：GPU delegate 在部分安卓 Chrome 机型上会「挂起」而非「报错」，
+  // 导致永远卡在加载转圈、不会回退。嘴势判定是轻量任务，手机 CPU 跑 WASM 足够。
+  // GPU 仅作为 CPU 异常时的兜底。
   let lastErr = null;
-  // 先试 GPU，失败回退 CPU（iOS/部分 Android 浏览器）
-  for (const delegate of ['GPU','CPU']) {
+  for (const delegate of ['CPU','GPU']) {
+    $('status').textContent = '正在初始化识别引擎（' + delegate + '）…';
     try {
-      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-        baseOptions: {...base, delegate},
-        outputFaceBlendshapes: true,
-        runningMode: 'VIDEO',
-        numFaces: 1,
-      });
+      faceLandmarker = await withTimeout(
+        FaceLandmarker.createFromOptions(vision, {
+          baseOptions: {...base, delegate},
+          outputFaceBlendshapes: true,
+          runningMode: 'VIDEO',
+          numFaces: 1,
+        }),
+        25000, delegate + ' 初始化'
+      );
       return;
     } catch(e) { lastErr = e; }
   }
