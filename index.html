@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f1a">
+<title>火柴人嘴势舞模拟器</title>
+<style>
+  :root{
+    --bg:#0d0f1a;
+    --panel:#161a2c;
+    --line:#262b42;
+    --text:#e8eaf6;
+    --dim:#8a90b0;
+    --accent:#ffd15c;
+    --up:#ff5c5c;
+    --down:#5cff8a;
+    --left:#5cc8ff;
+    --right:#ffb35c;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    overflow:hidden;
+    user-select:none;
+    -webkit-user-select:none;
+    touch-action:manipulation;
+  }
+  #app{display:flex;flex-direction:column;height:100%;max-width:520px;margin:0 auto;position:relative;}
+
+  /* 顶栏 */
+  #topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));
+    gap:8px;
+  }
+  #title{font-size:16px;font-weight:700;letter-spacing:.5px;white-space:nowrap;}
+  #title .sub{font-size:11px;color:var(--dim);font-weight:400;margin-left:4px;}
+  #scores{display:flex;gap:14px;font-variant-numeric:tabular-nums;}
+  .scorebox{text-align:right;}
+  .scorebox .label{font-size:10px;color:var(--dim);}
+  .scorebox .val{font-size:20px;font-weight:800;line-height:1.1;}
+  #combo .val{color:var(--accent);}
+
+  /* 舞台 */
+  #stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;min-height:0;}
+  #cv{display:block;width:100%;height:100%;}
+
+  /* 摄像头预览小窗 */
+  #camwrap{
+    position:absolute;right:12px;bottom:12px;
+    width:112px;height:150px;border-radius:14px;overflow:hidden;
+    border:2px solid var(--line);background:#000;
+    box-shadow:0 6px 24px rgba(0,0,0,.5);
+  }
+  #camwrap.hidden{display:none;}
+  #cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
+  #camlabel{
+    position:absolute;left:0;bottom:0;right:0;text-align:center;
+    font-size:9px;color:#fff;background:rgba(0,0,0,.45);padding:2px 0;
+  }
+
+  /* 底部提示区 */
+  #hintbar{
+    padding:10px 16px;padding-bottom:calc(10px + env(safe-area-inset-bottom));
+    display:flex;align-items:center;justify-content:center;gap:10px;
+  }
+  #hint{
+    font-size:15px;font-weight:700;padding:8px 18px;border-radius:999px;
+    background:var(--panel);border:1px solid var(--line);transition:all .2s;
+  }
+  #hint.idle{color:var(--dim);}
+  #legend{
+    display:flex;gap:8px;flex-wrap:wrap;justify-content:center;
+    padding:0 12px 12px;padding-bottom:calc(12px + env(safe-area-inset-bottom));
+  }
+  .lg{font-size:10px;color:var(--dim);padding:3px 8px;border-radius:6px;background:var(--panel);border:1px solid var(--line);}
+  .lg b{font-weight:700;}
+
+  /* 遮罩/按钮 */
+  #overlay{
+    position:absolute;inset:0;z-index:20;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center;
+    background:rgba(13,15,26,.92);backdrop-filter:blur(6px);
+  }
+  #overlay.hidden{display:none;}
+  #bigbtn{
+    font-size:18px;font-weight:800;color:#0d0f1a;background:var(--accent);
+    border:none;padding:16px 44px;border-radius:999px;cursor:pointer;
+    box-shadow:0 8px 30px rgba(255,209,92,.35);letter-spacing:1px;
+  }
+  #bigbtn:active{transform:scale(.96);}
+  #ov-title{font-size:26px;font-weight:900;letter-spacing:1px;}
+  #ov-desc{font-size:13px;color:var(--dim);line-height:1.8;max-width:360px;}
+  #ov-desc b{color:var(--text);}
+  #status{font-size:13px;color:var(--dim);min-height:20px;}
+  #err{font-size:12px;color:#ff6b6b;max-width:340px;line-height:1.6;display:none;}
+
+  /* 左右互换开关 */
+  #mirror-toggle{
+    position:absolute;right:12px;top:calc(60px + env(safe-area-inset-top));
+    font-size:10px;color:var(--dim);background:var(--panel);border:1px solid var(--line);
+    padding:6px 10px;border-radius:8px;cursor:pointer;z-index:15;
+  }
+  #mirror-toggle.on{color:var(--accent);border-color:var(--accent);}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="topbar">
+    <div id="title">🕺 火柴人嘴势舞 <span class="sub">Mouth-Dance Sim</span></div>
+    <div id="scores">
+      <div class="scorebox"><div class="label">得分</div><div class="val" id="score">0</div></div>
+      <div class="scorebox" id="combo"><div class="label">连击</div><div class="val" id="combov">0</div></div>
+      <div class="scorebox"><div class="label">最佳</div><div class="val" id="best">0</div></div>
+    </div>
+  </div>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="camwrap" class="hidden">
+      <video id="cam" autoplay playsinline muted></video>
+      <div id="camlabel">你的脸</div>
+    </div>
+  </div>
+
+  <button id="mirror-toggle">左右互换</button>
+
+  <div id="hintbar"><div id="hint" class="idle">准备开始…</div></div>
+  <div id="legend">
+    <div class="lg"><b style="color:#ff5c5c">↑ 上</b> 张嘴</div>
+    <div class="lg"><b style="color:#5cff8a">↓ 下</b> 撇嘴</div>
+    <div class="lg"><b style="color:#5cc8ff">← 左</b> 嘴往左</div>
+    <div class="lg"><b style="color:#ffb35c">→ 右</b> 嘴往右</div>
+  </div>
+
+  <div id="overlay">
+    <div id="ov-title">🕺 火柴人嘴势舞</div>
+    <div id="ov-desc">
+      火柴人会跳出 <b>上下左右</b> 四个方向的动作，<br>
+      你对着前置摄像头，用<b>嘴巴</b>还原对应方向：<br>
+      <b style="color:#ff5c5c">张嘴=上</b> · <b style="color:#5cff8a">撇嘴=下</b> · <b style="color:#5cc8ff">嘴左歪=左</b> · <b style="color:#ffb35c">嘴右歪=右</b>
+    </div>
+    <button id="bigbtn">开始跳舞</button>
+    <div id="status"></div>
+    <div id="err"></div>
+  </div>
+</div>
+
+<script type="module">
+import { FaceLandmarker, FilesetResolver } from "./mp/vision_bundle.mjs";
+
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+const video = $('cam');
+const overlay = $('overlay'), bigbtn = $('bigbtn'), statusEl = $('status'), errEl = $('err');
+const hintEl = $('hint'), scoreEl = $('score'), comboEl = $('combov'), bestEl = $('best');
+const mirrorToggle = $('mirror-toggle');
+
+// ---------- 配置 ----------
+const DIRECTIONS = ['up','down','left','right'];
+const DIR_META = {
+  up:    { label:'张嘴',   color:'#ff5c5c', arrow:'↑', mouth:'张嘴' },
+  down:  { label:'撇嘴',   color:'#5cff8a', arrow:'↓', mouth:'撇嘴' },
+  left:  { label:'嘴往左', color:'#5cc8ff', arrow:'←', mouth:'嘴往左' },
+  right: { label:'嘴往右', color:'#ffb35c', arrow:'→', mouth:'嘴往右' },
+};
+const ROUND_MS = 3000;        // 每题时长
+const DETECT_INTERVAL = 100;  // 检测节流(ms)
+const HIT_THRESHOLD = 0.34;   // 嘴势置信阈值
+
+let faceLandmarker = null;
+let running = false;
+let mirrorSwap = false;       // 左右互换开关
+
+// 游戏状态
+let score = 0, combo = 0, best = +(localStorage.getItem('mouthdance_best')||0);
+let targetDir = 'up';
+let roundStart = 0;
+let prevMouth = 'none';
+let currentMouth = 'none';
+let conf = 0;
+let hitFlash = 0;             // 命中闪光时间戳
+let missFlash = 0;
+
+bestEl.textContent = best;
+
+// ---------- 初始化模型 ----------
+async function loadModel(){
+  const vision = await FilesetResolver.forVisionTasks('./mp/wasm');
+  const base = { modelAssetPath:'./models/face_landmarker.task' };
+  // 先试 GPU，失败回退 CPU（iOS/部分 Android 浏览器）
+  for (const delegate of ['GPU','CPU']) {
+    try {
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {...base, delegate},
+        outputFaceBlendshapes: true,
+        runningMode: 'VIDEO',
+        numFaces: 1,
+      });
+      return;
+    } catch(e) { /* 尝试下一个 */ }
+  }
+  throw new Error('模型初始化失败');
+}
+
+// ---------- 摄像头 ----------
+async function initCamera(){
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('当前浏览器不支持摄像头');
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video:{ facingMode:'user', width:{ideal:640}, height:{ideal:480} },
+    audio:false
+  });
+  video.srcObject = stream;
+  await video.play();
+  $('camwrap').classList.remove('hidden');
+}
+
+// ---------- 嘴势分类 ----------
+function blendshapesToObj(list){
+  const o = {};
+  if (list && list[0] && list[0].categories)
+    for (const c of list[0].categories) o[c.categoryName] = c.score;
+  return o;
+}
+
+function classify(bs, lm){
+  // 模型视角的左右（原始帧，未镜像）
+  let mLeft = bs.mouthLeft || 0;
+  let mRight = bs.mouthRight || 0;
+  // 几何偏移增强：嘴中心 vs 鼻尖 的横向偏移
+  if (lm && lm.length > 300) {
+    const noseX = lm[1].x;
+    const mouthCX = (lm[13].x + lm[14].x) / 2;
+    const fw = Math.abs(lm[291].x - lm[61].x) || 0.001;
+    const off = (mouthCX - noseX) / fw;
+    if (off > 0.06)  mRight = Math.max(mRight, Math.min(1, off * 4));
+    if (off < -0.06) mLeft  = Math.max(mLeft,  Math.min(1, -off * 4));
+  }
+  const up = bs.jawOpen || 0;
+  const down = Math.max(bs.mouthFrownLeft || 0, bs.mouthFrownRight || 0);
+
+  // 预览镜像 → 玩家左 = 模型右
+  let left = mRight, right = mLeft;
+  if (mirrorSwap) { left = mLeft; right = mRight; }
+
+  const s = { up, down, left, right };
+  let best = 'none', bv = 0;
+  for (const k of DIRECTIONS) if (s[k] > bv) { bv = s[k]; best = k; }
+  if (bv < HIT_THRESHOLD) return { dir:'none', conf:bv };
+  return { dir:best, conf:bv };
+}
+
+// ---------- 判定 ----------
+function onHit(){
+  score += (1 + Math.floor(combo/5));
+  combo += 1;
+  if (score > best) { best = score; localStorage.setItem('mouthdance_best', best); }
+  scoreEl.textContent = score;
+  comboEl.textContent = combo;
+  bestEl.textContent = best;
+  hitFlash = performance.now();
+  nextRound();
+}
+function onMiss(){
+  combo = 0;
+  comboEl.textContent = 0;
+  missFlash = performance.now();
+  nextRound();
+}
+function nextRound(){
+  let next;
+  do { next = DIRECTIONS[Math.floor(Math.random()*4)]; } while (next === targetDir);
+  targetDir = next;
+  roundStart = performance.now();
+  prevMouth = 'none';
+}
+
+// ---------- 检测循环 ----------
+let lastDetect = 0;
+function detect(ts){
+  if (!running || !faceLandmarker || video.readyState < 2) return;
+  if (ts - lastDetect < DETECT_INTERVAL) return;
+  lastDetect = ts;
+  try {
+    const res = faceLandmarker.detectForVideo(video, ts);
+    const lm = res.faceLandmarks?.[0] || null;
+    const bs = blendshapesToObj(res.faceBlendshapes);
+    if (!lm || Object.keys(bs).length === 0) { currentMouth='none'; conf=0; return; }
+    const c = classify(bs, lm);
+    currentMouth = c.dir; conf = c.conf;
+
+    if (c.dir === targetDir && prevMouth !== targetDir) {
+      onHit();
+    } else {
+      prevMouth = c.dir;
+    }
+  } catch(e){ /* 单帧失败忽略 */ }
+}
+
+// ---------- 绘制 ----------
+let W=0,H=0,DPR=1;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W*DPR; cv.height = H*DPR;
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+}
+window.addEventListener('resize', resize);
+
+function drawStickman(now){
+  const cx = W/2, cy = H/2;
+  const meta = DIR_META[targetDir];
+  const col = meta.color;
+  const t = now/1000;
+  const bob = Math.sin(t*3)*3;              // 轻微浮动
+  const scale = Math.min(W,H)/420;
+
+  // 身体姿态参数
+  let armL=[0,0], armR=[0,0], legL=[0,0], legR=[0,0], torsoTop=[0,0], torsoBot=[0,0], headC=[0,0], lean=0;
+  const hx=cx, hy=cy+bob;
+  const headR = 30*scale;
+  const neckY = hy - 74*scale;
+  const hipY  = hy + 26*scale;
+  headC = [hx, hy - 96*scale];
+
+  // 命中/失误闪光
+  const flash = (now - hitFlash < 250) ? 1 : 0;
+
+  ctx.clearRect(0,0,W,H);
+
+  // 背景网格光晕
+  ctx.save();
+  ctx.globalAlpha = 0.08;
+  ctx.strokeStyle = col; ctx.lineWidth = 1;
+  for (let i=-1;i<=W/60;i++){ ctx.beginPath(); ctx.moveTo(i*60,0); ctx.lineTo(i*60,H); ctx.stroke(); }
+  for (let j=-1;j<=H/60;j++){ ctx.beginPath(); ctx.moveTo(0,j*60); ctx.lineTo(W,j*60); ctx.stroke(); }
+  ctx.restore();
+
+  // 根据方向摆 pose
+  const ext = 46*scale; // 四肢伸展幅度
+  switch(targetDir){
+    case 'up':
+      armL=[hx-ext, hy-118*scale]; armR=[hx+ext, hy-118*scale];
+      legL=[hx-20*scale, hipY+52*scale]; legR=[hx+20*scale, hipY+52*scale];
+      break;
+    case 'down':
+      armL=[hx-ext*0.9, hy-20*scale]; armR=[hx+ext*0.9, hy-20*scale];
+      legL=[hx-38*scale, hipY+8*scale]; legR=[hx+38*scale, hipY+8*scale];
+      break;
+    case 'left':
+      lean = -12*scale;
+      armL=[hx-ext*1.15, hy-70*scale]; armR=[hx+ext*0.3, hy-80*scale];
+      legL=[hx-34*scale, hipY+50*scale]; legR=[hx+26*scale, hipY+50*scale];
+      break;
+    case 'right':
+      lean = 12*scale;
+      armL=[hx-ext*0.3, hy-80*scale]; armR=[hx+ext*1.15, hy-70*scale];
+      legL=[hx-26*scale, hipY+50*scale]; legR=[hx+34*scale, hipY+50*scale];
+      break;
+  }
+  const bx = hx + lean;   // 身体倾斜后的中心
+  const shoulder = [bx, hy-64*scale];
+  const hip = [bx, hipY];
+
+  ctx.save();
+  // 命中闪光：火柴人变白亮
+  const mainCol = flash ? '#ffffff' : col;
+
+  // 线条样式
+  ctx.lineCap='round'; ctx.lineJoin='round';
+  ctx.strokeStyle = mainCol;
+  ctx.lineWidth = 8*scale;
+  ctx.shadowColor = col; ctx.shadowBlur = flash ? 30 : 14;
+
+  // 身体
+  ctx.beginPath(); ctx.moveTo(shoulder[0],shoulder[1]); ctx.lineTo(hip[0],hip[1]); ctx.stroke();
+  // 手臂
+  ctx.beginPath(); ctx.moveTo(shoulder[0],shoulder[1]); ctx.lineTo(armL[0],armL[1]); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(shoulder[0],shoulder[1]); ctx.lineTo(armR[0],armR[1]); ctx.stroke();
+  // 腿
+  ctx.beginPath(); ctx.moveTo(hip[0],hip[1]); ctx.lineTo(legL[0],legL[1]); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(hip[0],hip[1]); ctx.lineTo(legR[0],legR[1]); ctx.stroke();
+  // 头
+  ctx.fillStyle = mainCol;
+  ctx.beginPath(); ctx.arc(headC[0],headC[1],headR,0,Math.PI*2); ctx.fill();
+
+  // 关节圆点
+  ctx.fillStyle = '#0d0f1a';
+  ctx.beginPath(); ctx.arc(shoulder[0],shoulder[1],5*scale,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(hip[0],hip[1],5*scale,0,Math.PI*2); ctx.fill();
+
+  // 方向箭头（火柴人头顶上方）
+  const arrowY = headC[1] - headR - 40*scale;
+  ctx.shadowBlur = 20;
+  ctx.fillStyle = col;
+  ctx.font = `900 ${60*scale}px sans-serif`;
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(meta.arrow, hx, arrowY);
+
+  ctx.restore();
+
+  // 进度环（剩余时间）
+  const remain = 1 - (now - roundStart)/ROUND_MS;
+  const pr = Math.max(0, Math.min(1, remain));
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(hx, hy, 90*scale, -Math.PI/2, -Math.PI/2 + pr*Math.PI*2);
+  ctx.strokeStyle = col; ctx.globalAlpha = 0.35; ctx.lineWidth = 6*scale; ctx.lineCap='round';
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- 主循环 ----------
+function loop(now){
+  requestAnimationFrame(loop);
+  if (running) {
+    detect(now);
+    // 超时未命中
+    if (now - roundStart > ROUND_MS) onMiss();
+  }
+  drawStickman(now);
+
+  // 更新提示文字
+  if (running) {
+    const m = DIR_META[targetDir];
+    hintEl.textContent = `${m.arrow}  ${m.mouth}！`;
+    hintEl.style.color = m.color;
+    hintEl.style.borderColor = m.color;
+    hintEl.classList.remove('idle');
+  } else {
+    hintEl.textContent = '准备开始…';
+    hintEl.style.color = '';
+    hintEl.style.borderColor = '';
+    hintEl.classList.add('idle');
+  }
+
+  // 显示当前识别到的嘴势（调试/反馈）
+  $('camlabel').textContent = running
+    ? `识别: ${currentMouth==='none'?'—':DIR_META[currentMouth]?.arrow} ${(conf*100)|0}%`
+    : '你的脸';
+}
+
+// ---------- 启动 ----------
+async function start(){
+  overlay.classList.add('hidden');
+  statusEl.textContent = '';
+  errEl.style.display = 'none';
+  try {
+    if (!faceLandmarker) {
+      statusEl.textContent = '正在加载 AI 模型…';
+      await loadModel();
+    }
+    if (!video.srcObject) {
+      statusEl.textContent = '正在开启摄像头…';
+      await initCamera();
+    }
+    score = 0; combo = 0;
+    scoreEl.textContent = 0; comboEl.textContent = 0;
+    targetDir = 'up';
+    roundStart = performance.now();
+    prevMouth = 'none';
+    running = true;
+  } catch(e){
+    overlay.classList.remove('hidden');
+    statusEl.textContent = '';
+    errEl.style.display = 'block';
+    errEl.textContent = '启动失败：' + e.message + '（请确认已允许摄像头权限，且通过 https 或 localhost 访问）';
+  }
+}
+
+bigbtn.addEventListener('click', start);
+mirrorToggle.addEventListener('click', ()=>{
+  mirrorSwap = !mirrorSwap;
+  mirrorToggle.classList.toggle('on', mirrorSwap);
+  mirrorToggle.textContent = mirrorSwap ? '左右互换 ✓' : '左右互换';
+});
+
+// 初始化尺寸并启动渲染
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
