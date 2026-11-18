@@ -50,19 +50,23 @@
   #stage{flex:1;position:relative;display:flex;align-items:center;justify-content:center;min-height:0;}
   #cv{display:block;width:100%;height:100%;}
 
-  /* 摄像头预览小窗 */
+  /* 摄像头预览小窗（屏幕上方中间，与目标提示同视野；命中时绿色高亮） */
   #camwrap{
-    position:absolute;right:12px;bottom:12px;
-    width:112px;height:150px;border-radius:14px;overflow:hidden;
+    position:absolute;left:50%;top:6px;transform:translateX(-50%);
+    width:96px;height:120px;border-radius:14px;overflow:hidden;
     border:2px solid var(--line);background:#000;
     box-shadow:0 6px 24px rgba(0,0,0,.5);
+    transition:border-color .15s, box-shadow .15s;
   }
   #camwrap.hidden{display:none;}
+  #camwrap.hit{border-color:#5cff8a;box-shadow:0 0 18px rgba(92,255,138,.65);}
   #cam{width:100%;height:100%;object-fit:cover;transform:scaleX(-1);}
   #camlabel{
     position:absolute;left:0;bottom:0;right:0;text-align:center;
-    font-size:9px;color:#fff;background:rgba(0,0,0,.45);padding:2px 0;
+    font-size:9px;color:#fff;background:rgba(0,0,0,.55);padding:3px 0;
+    transition:background .15s;
   }
+  #camwrap.hit #camlabel{background:rgba(92,255,138,.9);color:#0d0f1a;font-weight:700;}
 
   /* 底部提示区 */
   #hintbar{
@@ -144,17 +148,17 @@
   <div id="hintbar"><div id="hint" class="idle">准备开始…</div></div>
   <div id="legend">
     <div class="lg"><b style="color:#ff5c5c">↑ 上</b> 张嘴</div>
-    <div class="lg"><b style="color:#5cff8a">↓ 下</b> 撇嘴</div>
-    <div class="lg"><b style="color:#5cc8ff">← 左</b> 嘴往左</div>
-    <div class="lg"><b style="color:#ffb35c">→ 右</b> 嘴往右</div>
+    <div class="lg"><b style="color:#5cc8ff">← 左</b> 嘴左歪</div>
+    <div class="lg"><b style="color:#ffb35c">→ 右</b> 嘴右歪</div>
   </div>
 
   <div id="overlay">
     <div id="ov-title">🕺 火柴人嘴势舞</div>
     <div id="ov-desc">
-      火柴人会跳出 <b>上下左右</b> 四个方向的动作，<br>
+      火柴人会跳出 <b>三个方向</b> 的动作，<br>
       你对着前置摄像头，用<b>嘴巴</b>还原对应方向：<br>
-      <b style="color:#ff5c5c">张嘴=上</b> · <b style="color:#5cff8a">撇嘴=下</b> · <b style="color:#5cc8ff">嘴左歪=左</b> · <b style="color:#ffb35c">嘴右歪=右</b>
+      <b style="color:#ff5c5c">张嘴=上</b> · <b style="color:#5cc8ff">嘴左歪=左</b> · <b style="color:#ffb35c">嘴右歪=右</b><br>
+      <span style="color:#8a90b0;font-size:11px;">点开始后先进入教学，跟学 3 个嘴势并自动校正左右</span>
     </div>
     <div id="wxwarn"></div>
     <button id="bigbtn">开始跳舞</button>
@@ -177,20 +181,27 @@ const hintEl = $('hint'), scoreEl = $('score'), comboEl = $('combov'), bestEl = 
 const mirrorToggle = $('mirror-toggle');
 
 // ---------- 配置 ----------
-const DIRECTIONS = ['up','down','left','right'];
+const DIRECTIONS = ['up','left','right'];
 const DIR_META = {
   up:    { label:'张嘴',   color:'#ff5c5c', arrow:'↑', mouth:'张嘴' },
-  down:  { label:'撇嘴',   color:'#5cff8a', arrow:'↓', mouth:'撇嘴' },
-  left:  { label:'嘴往左', color:'#5cc8ff', arrow:'←', mouth:'嘴往左' },
-  right: { label:'嘴往右', color:'#ffb35c', arrow:'→', mouth:'嘴往右' },
+  left:  { label:'嘴往左', color:'#5cc8ff', arrow:'←', mouth:'嘴往左歪' },
+  right: { label:'嘴往右', color:'#ffb35c', arrow:'→', mouth:'嘴往右歪' },
 };
 const ROUND_MS = 3000;        // 每题时长
 const DETECT_INTERVAL = 100;  // 检测节流(ms)
-const HIT_THRESHOLD = 0.34;   // 嘴势置信阈值
+const HIT_THRESHOLD = 0.30;   // 嘴势置信阈值（30% 即判定成功）
 
 let faceLandmarker = null;
 let running = false;
 let mirrorSwap = false;       // 左右互换开关
+
+// 教学状态
+let teaching = false;
+const TEACH_STEPS = ['up','left','right'];  // 教学顺序：张嘴→左撇→右撇
+let teachStep = 0;
+let teachHoldStart = 0;       // 当前教学动作持续识别起始时间戳
+let teachSuccessFlash = 0;    // 教学成功闪光时间戳
+let mirrorFixFlash = 0;       // 自动校正左右闪光时间戳
 
 // 游戏状态
 let score = 0, combo = 0, best = +(localStorage.getItem('mouthdance_best')||0);
@@ -336,13 +347,12 @@ function classify(bs, lm){
     if (off < -0.06) mLeft  = Math.max(mLeft,  Math.min(1, -off * 4));
   }
   const up = bs.jawOpen || 0;
-  const down = Math.max(bs.mouthFrownLeft || 0, bs.mouthFrownRight || 0);
 
   // 预览镜像 → 玩家左 = 模型右
   let left = mRight, right = mLeft;
   if (mirrorSwap) { left = mLeft; right = mRight; }
 
-  const s = { up, down, left, right };
+  const s = { up, left, right };
   let best = 'none', bv = 0;
   for (const k of DIRECTIONS) if (s[k] > bv) { bv = s[k]; best = k; }
   if (bv < HIT_THRESHOLD) return { dir:'none', conf:bv };
@@ -368,10 +378,44 @@ function onMiss(){
 }
 function nextRound(){
   let next;
-  do { next = DIRECTIONS[Math.floor(Math.random()*4)]; } while (next === targetDir);
+  do { next = DIRECTIONS[Math.floor(Math.random()*DIRECTIONS.length)]; } while (next === targetDir);
   targetDir = next;
   roundStart = performance.now();
   prevMouth = 'none';
+}
+
+// ---------- 教学判定 ----------
+function teachDetect(c){
+  const want = TEACH_STEPS[teachStep];
+  // 镜像冲突：做左却识别成右、做右却识别成左 → 前置摄像头镜像反了，自动校正
+  const mirrorConflict = (want === 'left' && c.dir === 'right') || (want === 'right' && c.dir === 'left');
+  if (mirrorConflict) {
+    if (!teachHoldStart) teachHoldStart = performance.now();
+    if (performance.now() - teachHoldStart > 500) {
+      mirrorSwap = !mirrorSwap;
+      mirrorToggle.classList.toggle('on', mirrorSwap);
+      mirrorToggle.textContent = mirrorSwap ? '左右互换 ✓' : '左右互换';
+      teachHoldStart = 0;
+      mirrorFixFlash = performance.now();
+    }
+    return;
+  }
+  if (c.dir === want) {
+    if (!teachHoldStart) teachHoldStart = performance.now();
+    if (performance.now() - teachHoldStart > 500) {
+      teachStep += 1;
+      teachHoldStart = 0;
+      teachSuccessFlash = performance.now();
+      if (teachStep >= TEACH_STEPS.length) finishTeach();
+    }
+  } else {
+    teachHoldStart = 0;
+  }
+}
+function finishTeach(){
+  teaching = false;
+  running = true;
+  nextRound();
 }
 
 // ---------- 检测循环 ----------
@@ -388,7 +432,9 @@ function detect(ts){
     const c = classify(bs, lm);
     currentMouth = c.dir; conf = c.conf;
 
-    if (c.dir === targetDir && prevMouth !== targetDir) {
+    if (teaching) {
+      teachDetect(c);
+    } else if (c.dir === targetDir && prevMouth !== targetDir) {
       onHit();
     } else {
       prevMouth = c.dir;
@@ -407,7 +453,7 @@ function resize(){
 window.addEventListener('resize', resize);
 
 function drawStickman(now){
-  const cx = W/2, cy = H/2;
+  const cx = W/2, cy = H/2 + 85;   // 下移，给顶部摄像头预览留空间
   const meta = DIR_META[targetDir];
   const col = meta.color;
   const t = now/1000;
@@ -441,10 +487,6 @@ function drawStickman(now){
     case 'up':
       armL=[hx-ext, hy-118*scale]; armR=[hx+ext, hy-118*scale];
       legL=[hx-20*scale, hipY+52*scale]; legR=[hx+20*scale, hipY+52*scale];
-      break;
-    case 'down':
-      armL=[hx-ext*0.9, hy-20*scale]; armR=[hx+ext*0.9, hy-20*scale];
-      legL=[hx-38*scale, hipY+8*scale]; legR=[hx+38*scale, hipY+8*scale];
       break;
     case 'left':
       lean = -12*scale;
@@ -509,18 +551,97 @@ function drawStickman(now){
   ctx.restore();
 }
 
+// ---------- 教学绘制 ----------
+function drawTeach(now){
+  ctx.clearRect(0,0,W,H);
+  const cx = W/2, cy = H/2 + 20;
+  const want = TEACH_STEPS[teachStep];
+  const meta = DIR_META[want];
+  const col = meta.color;
+
+  // 背景网格
+  ctx.save();
+  ctx.globalAlpha = 0.06;
+  ctx.strokeStyle = col; ctx.lineWidth = 1;
+  for (let i=0;i<=W/50;i++){ ctx.beginPath(); ctx.moveTo(i*50,0); ctx.lineTo(i*50,H); ctx.stroke(); }
+  for (let j=0;j<=H/50;j++){ ctx.beginPath(); ctx.moveTo(0,j*50); ctx.lineTo(W,j*50); ctx.stroke(); }
+  ctx.restore();
+
+  const success = (now - teachSuccessFlash < 700);
+  const mirrorFix = (now - mirrorFixFlash < 1500);
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+
+  // 标题
+  ctx.fillStyle = '#8a90b0';
+  ctx.font = '600 14px sans-serif';
+  ctx.fillText('教学：跟学 3 个嘴势', cx, cy - 96);
+
+  // 步骤圆点
+  const gap = 26, sx = cx - (TEACH_STEPS.length-1)*gap/2;
+  for (let i=0;i<TEACH_STEPS.length;i++){
+    ctx.beginPath(); ctx.arc(sx + i*gap, cy - 68, 6, 0, Math.PI*2);
+    ctx.fillStyle = i < teachStep ? '#5cff8a' : (i === teachStep ? col : '#262b42');
+    ctx.fill();
+  }
+
+  if (success) {
+    ctx.fillStyle = '#5cff8a';
+    ctx.font = '900 58px sans-serif';
+    ctx.fillText('✓ 成功！', cx, cy - 16);
+    ctx.fillStyle = '#e8eaf6';
+    ctx.font = '500 18px sans-serif';
+    ctx.fillText('很好，就是这样～', cx, cy + 34);
+  } else {
+    ctx.fillStyle = col;
+    ctx.font = '900 56px sans-serif';
+    ctx.fillText(meta.arrow + ' ' + meta.mouth, cx, cy - 16);
+    ctx.fillStyle = '#e8eaf6';
+    ctx.font = '500 18px sans-serif';
+    ctx.fillText('请做「' + meta.mouth + '」并保持半秒', cx, cy + 34);
+  }
+
+  if (mirrorFix) {
+    ctx.fillStyle = '#ffb35c';
+    ctx.font = '600 15px sans-serif';
+    ctx.fillText('已自动校正左右方向 ✓', cx, cy + 74);
+  }
+}
+
+// ---------- 摄像头反馈（命中高亮 + 判定成功提示） ----------
+function updateCamFeedback(){
+  const camwrap = $('camwrap');
+  let want = null;
+  if (teaching) want = TEACH_STEPS[teachStep];
+  else if (running) want = targetDir;
+  const hitNow = want && currentMouth === want;
+  camwrap.classList.toggle('hit', !!hitNow);
+  if (hitNow) {
+    $('camlabel').textContent = `✓ 成功 ${(conf*100)|0}%`;
+  } else if (currentMouth === 'none') {
+    $('camlabel').textContent = `— ${(conf*100)|0}%`;
+  } else {
+    $('camlabel').textContent = `${DIR_META[currentMouth]?.arrow} ${(conf*100)|0}%`;
+  }
+}
+
 // ---------- 主循环 ----------
 function loop(now){
   requestAnimationFrame(loop);
-  if (running) {
+  if (running || teaching) {
     detect(now);
-    // 超时未命中
-    if (now - roundStart > ROUND_MS) onMiss();
+    if (running && now - roundStart > ROUND_MS) onMiss();
   }
-  drawStickman(now);
+  if (teaching) drawTeach(now);
+  else drawStickman(now);
 
   // 更新提示文字
-  if (running) {
+  if (teaching) {
+    const m = DIR_META[TEACH_STEPS[teachStep]];
+    hintEl.textContent = `教学 ${teachStep+1}/${TEACH_STEPS.length}：请做「${m.mouth}」`;
+    hintEl.style.color = m.color;
+    hintEl.style.borderColor = m.color;
+    hintEl.classList.remove('idle');
+  } else if (running) {
     const m = DIR_META[targetDir];
     hintEl.textContent = `${m.arrow}  ${m.mouth}！`;
     hintEl.style.color = m.color;
@@ -533,10 +654,7 @@ function loop(now){
     hintEl.classList.add('idle');
   }
 
-  // 显示当前识别到的嘴势（调试/反馈）
-  $('camlabel').textContent = running
-    ? `识别: ${currentMouth==='none'?'—':DIR_META[currentMouth]?.arrow} ${(conf*100)|0}%`
-    : '你的脸';
+  updateCamFeedback();
 }
 
 // ---------- 启动 ----------
@@ -556,10 +674,12 @@ async function start(){
 
     score = 0; combo = 0;
     scoreEl.textContent = 0; comboEl.textContent = 0;
-    targetDir = 'up';
-    roundStart = performance.now();
-    prevMouth = 'none';
-    running = true;
+    teaching = true;
+    teachStep = 0;
+    teachHoldStart = 0;
+    teachSuccessFlash = 0;
+    mirrorFixFlash = 0;
+    running = false;
     overlay.classList.add('hidden');
     $('loading').classList.add('hidden');
     bigbtn.disabled = false;
